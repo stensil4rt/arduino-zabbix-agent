@@ -1,0 +1,88 @@
+//******************************************************************************
+//* Purpose : Zabbix Sensor Agent - Environmental Monitoring Solution
+//* Git : https://github.com/stensilart/arduino-zabbix-agent
+//* Author :  Aleksey Vozdvizhenskiy
+//* https://github.com/stensilart
+//* Credits: *
+//******************************************************************************
+
+
+#include <UIPEthernet.h> // Библииотека для инициализации Ethernet-модуля (ENC28J60)
+#include <DHT.h> // Библииотека для инициализации датчика температуры и влажности (DHT11)
+
+#define DHTPIN 4 // Номер пина, на котором подключен датчик
+
+DHT dht(DHTPIN, DHT11); //Инициация датчика DHT11
+
+byte mac[] = { 0xDE, 0x05, 0xB6, 0x27, 0x39, 0x19 }; // random MAC
+byte ip[] = { 192, 168, 1, 5 }; // IP address in local network
+String readString = String(20); 
+
+const int Di5 = 5;           // номер входа, подключенный к кнопке
+const int led =  3;      // номер выхода светодиода
+const int sign = 9;    // номер выхода динамика
+
+EthernetServer server(10050); // Zabbix agent port
+
+void setup() {
+  Ethernet.begin(mac, ip);
+  server.begin();
+  dht.begin();
+//  Serial.begin(9600); 
+
+  pinMode(led, OUTPUT); // инициализируем пин, подключенный к светодиоду, как выход
+  pinMode(Di5, INPUT);      // инициализируем пин, подключенный к кнопке, как вход
+  pinMode(sign, OUTPUT); //объявляем пин как выход
+}
+
+void loop() {
+  readString = "";
+  if (EthernetClient client = server.available())
+  {
+    while (client.connected()) {
+      if (client.available()) {
+        char c = client.read();
+        if (c == '\n') // end of query from zabbix server 
+        {
+          client.print("ZBXD\x01"); // response header
+          if (readString == "agent.ping") {
+            byte responseBytes [] = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, '1'}; 
+            client.write(responseBytes, 9);
+          } else //Измеряем температуру
+            if (readString == "env.temp") {
+              float t = dht.readTemperature();
+              byte responseBytes [] = {(byte) String(t).length(), 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+              client.write(responseBytes, 8);
+              client.print(t);
+          } else //Измеряем влажность
+            if (readString == "env.hum"){
+              float h = dht.readHumidity();
+              byte responseBytes [] = {(byte) String(h).length(), 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+              client.write(responseBytes, 8);
+              client.print(h);
+          } else //Измеряем параметры на DIGITAL контакте D5 
+            if (readString == "env.d5"){
+              if (digitalRead(Di5) == HIGH){
+                byte responseBytes [] = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, '5'}; 
+                client.write(responseBytes, 9);
+              } else { //Если контакт не замкнут, то возвращаем 0 
+                byte responseBytes [] = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, '0'};
+                client.write(responseBytes, 9);
+              }
+          } else //Если данных нет, то возвращаем 0 
+              {
+               byte responseBytes [] = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, '0'};
+               client.write(responseBytes, 9);
+              }
+          break;
+        }
+        else if (readString.length() < 20) {
+          readString = readString + c;
+        }
+      }
+    }
+    delay(10);
+    client.stop();
+  }
+}
+
